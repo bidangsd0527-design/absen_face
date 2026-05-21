@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SISTEM ABSENSI FOTO WAJAH OTOMATIS</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 10px; margin: 0; }
+    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 430px; text-align: center; box-sizing: border-box; }
+    .video-container { position: relative; width: 100%; height: 280px; background: #000; border-radius: 12px; margin-bottom: 15px; overflow: hidden; }
+    video { width: 100%; height: 100%; transform: scaleX(-1); object-fit: cover; }
+    canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+    input, select, button { width: 100%; padding: 14px; margin-top: 12px; border-radius: 10px; border: 1px solid #ddd; font-size: 16px; box-sizing: border-box; outline: none; }
+    button { color: white; border: none; font-weight: bold; cursor: pointer; }
+    .btn-reg { background: #198754; }
+    .mode-box { display: flex; gap: 10px; margin-bottom: 15px; }
+    .mode-btn { flex: 1; padding: 10px; border: 2px solid #0d6efd; background: white; color: #0d6efd; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; }
+    .mode-btn.active { background: #0d6efd; color: white; }
+    #status { padding: 12px; border-radius: 8px; font-weight: bold; margin-bottom: 15px; background: #e3f2fd; color: #0d47a1; font-size: 14px; }
+    #boxRegistrasi { display: none; border-top: 2px dashed #ccc; margin-top: 15px; padding-top: 5px; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2 style="color: #333; margin-top: 0; margin-bottom: 5px;">ABSENSI GERBANG AI</h2>
+    <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Deteksi Wajah Otomatis Real-Time</p>
+    
+    <div id="status">⏳ Memuat AI Wajah... Mohon Tunggu</div>
+    
+    <div class="mode-box">
+      <button id="btnModeAbsen" class="mode-btn active" onclick="setMode('absen')">🔄 MODE ABSEN OTOMATIS</button>
+      <button id="btnModeReg" class="mode-btn" onclick="setMode('registrasi')">👤 DAFTAR WAJAH BARU</button>
+    </div>
+    
+    <div class="video-container">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <div id="boxRegistrasi">
+      <h4 style="margin: 10px 0 0 0; color: #198754;">Form Pendaftaran Wajah</h4>
+      <select id="kelas">
+        <option value="1A">KELAS 1A</option>
+        <option value="1B">KELAS 1B</option>
+        <option value="2A">KELAS 2A</option>
+      </select>
+      <input type="text" id="nama" placeholder="Ketik Nama Lengkap Siswa" autocomplete="off">
+      <button class="btn-reg" onclick="prosesRegistrasi()">DAFTARKAN IDENTITAS WAJAH</button>
+    </div>
+  </div>
+
+<script>
+// Otomatis mengambil URL Web App saat ini (Tidak perlu repot ganti URL lagi)
+const WEB_APP_URL = google.script.run.withSuccessHandler; 
+
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const statusBox = document.getElementById('status');
+let databaseWajahSiswa = [];
+let sistemMode = 'absen'; 
+let jepretanTerakhirDescriptor = null;
+let sedangMemprosesAbsen = false;
+
+async function initSistem() {
+  try {
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+    
+    statusBox.innerHTML = "⏳ Mengunduh Database Wajah Siswa...";
+    muatDatabaseWajah();
+  } catch(e) {
+    statusBox.innerHTML = "❌ Gagal memuat AI: " + e.message;
+  }
+}
+
+function muatDatabaseWajah() {
+  // Memanggil fungsi Backend Apps Script secara langsung (Aman dari CORS)
+  google.script.run.withSuccessHandler(function(res) {
+    if (res.status === "SUCCESS") {
+      databaseWajahSiswa = res.data.filter(s => s.descriptor !== null);
+      statusBox.innerHTML = "💡 Menyalakan Kamera Perangkat...";
+      bukaKamera();
+    } else {
+      statusBox.innerHTML = "❌ Gagal Sinkronisasi Basis Data.";
+    }
+  }).ambilDatabaseSistem();
+}
+
+async function bukaKamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+    video.srcObject = stream;
+    statusBox.innerHTML = "🖥️ KAMERA SIAP. Silakan Hadap Kamera.";
+    statusBox.style.backgroundColor = "#e8f5e9";
+    statusBox.style.color = "#1b5e20";
+    mulaiDeteksiWajahLive();
+  } catch(err) {
+    statusBox.innerHTML = "❌ Kamera Diblokir: " + err.message;
+  }
+}
+
+function mulaiDeteksiWajahLive() {
+  const displaySize = { width: video.clientWidth, height: video.clientHeight };
+  faceapi.matchDimensions(overlay, displaySize);
+
+  setInterval(async () => {
+    if (sedangMemprosesAbsen) return;
+
+    const deteksi = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                                 .withFaceLandmarks()
+                                 .withFaceDescriptor();
+
+    const ctx = overlay.getContext('2d');
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    if (deteksi) {
+      const resizedDetections = faceapi.resizeResults(deteksi, displaySize);
+      faceapi.draw.drawDetections(overlay, resizedDetections);
+      jepretanTerakhirDescriptor = deteksi.descriptor;
+
+      if (sistemMode === 'absen' && databaseWajahSiswa.length > 0) {
+        lakukanPencocokanWajah(deteksi.descriptor);
+      }
+    }
+  }, 700);
+}
+
+function lakukanPencocokanWajah(descriptorBaru) {
+  let jarakTerdekat = 1.0;
+  let siswaDitemukan = null;
+
+  databaseWajahSiswa.forEach(siswa => {
+    const jarak = faceapi.euclideanDistance(descriptorBaru, Object.values(siswa.descriptor));
+    if (jarak < jarakTerdekat) {
+      jarakTerdekat = jarak;
+      siswaDitemukan = siswa;
+    }
+  });
+
+  if (jarakTerdekat < 0.55 && siswaDitemukan) {
+    sedangMemprosesAbsen = true;
+    statusBox.innerHTML = `🎉 Terdeteksi: ${siswaDitemukan.nama}! Mengirim Absen...`;
+    statusBox.style.backgroundColor = "#fff3cd";
+    statusBox.style.color = "#664d03";
+
+    const fotoB64 = tangkapGambarB64();
+    const payload = {
+      tipe: "ABSENSI",
+      nama: siswaDitemukan.nama,
+      kelas: siswaDitemukan.kelas,
+      image: fotoB64
+    };
+
+    google.script.run.withSuccessHandler(function(res) {
+      if(res.status === "SUCCESS") {
+        statusBox.innerHTML = `✅ ABSENSI ${siswaDitemukan.nama} BERHASIL!`;
+        statusBox.style.backgroundColor = "#e8f5e9";
+        statusBox.style.color = "#1b5e20";
+        setTimeout(() => {
+          sedangMemprosesAbsen = false;
+          statusBox.innerHTML = "🖥️ KAMERA SIAP. Silakan Hadap Kamera.";
+        }, 4000);
+      }
+    }).simpanDataSistem(payload);
+  }
+}
+
+function prosesRegistrasi() {
+  const nama = document.getElementById('nama').value;
+  const kelas = document.getElementById('kelas').value;
+
+  if(!nama || !jepretanTerakhirDescriptor) {
+    return alert("Wajah belum terdeteksi AI atau Nama siswa masih kosong!");
+  }
+
+  statusBox.innerHTML = "⏳ Mendaftarkan struktur wajah ke Google Sheets...";
+  statusBox.style.backgroundColor = "#fff3cd";
+  statusBox.style.color = "#664d03";
+  
+  const fotoB64 = tangkapGambarB64();
+  const payload = {
+    tipe: "SISWA",
+    nama: nama,
+    kelas: kelas,
+    image: fotoB64,
+    descriptor: Array.from(jepretanTerakhirDescriptor)
+  };
+
+  google.script.run.withSuccessHandler(function(res) {
+    if (res.status === "SUCCESS") {
+      alert("🎉 Pendaftaran Wajah Berhasil!");
+      document.getElementById('nama').value = '';
+      muatDatabaseWajah();
+      setMode('absen');
+    } else {
+      alert("Gagal: " + res.message);
+    }
+  }).simpanDataSistem(payload);
+}
+
+function setMode(mode) {
+  sistemMode = mode;
+  document.getElementById('btnModeAbsen').className = mode === 'absen' ? 'mode-btn active' : 'mode-btn';
+  document.getElementById('btnModeReg').className = mode === 'registrasi' ? 'mode-btn active' : 'mode-btn';
+  document.getElementById('boxRegistrasi').style.display = mode === 'registrasi' ? 'block' : 'none';
+}
+
+function tangkapGambarB64() {
+  const dummyCanvas = document.createElement('canvas');
+  dummyCanvas.width = video.videoWidth;
+  dummyCanvas.height = video.videoHeight;
+  const ctx = dummyCanvas.getContext('2d');
+  ctx.translate(dummyCanvas.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0);
+  return dummyCanvas.toDataURL('image/png');
+}
+
+window.onload = initSistem;
+</script>
+</body>
+</html>
