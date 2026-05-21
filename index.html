@@ -6,18 +6,18 @@
   <title>SISTEM ABSENSI FOTO WAJAH OTOMATIS</title>
   <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
   <style>
-    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 10px; margin: 0; }
-    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 430px; text-align: center; box-sizing: border-box; }
-    .video-container { position: relative; width: 100%; height: 280px; background: #000; border-radius: 12px; margin-bottom: 15px; overflow: hidden; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 20px; margin: 0; }
+    .card { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 450px; text-align: center; }
+    .video-container { position: relative; width: 100%; height: 300px; background: #000; border-radius: 12px; margin-bottom: 15px; overflow: hidden; }
     video { width: 100%; height: 100%; transform: scaleX(-1); object-fit: cover; }
     canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
     input, select, button { width: 100%; padding: 14px; margin-top: 12px; border-radius: 10px; border: 1px solid #ddd; font-size: 16px; box-sizing: border-box; outline: none; }
     button { color: white; border: none; font-weight: bold; cursor: pointer; }
     .btn-reg { background: #198754; }
     .mode-box { display: flex; gap: 10px; margin-bottom: 15px; }
-    .mode-btn { flex: 1; padding: 10px; border: 2px solid #0d6efd; background: white; color: #0d6efd; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; }
+    .mode-btn { flex: 1; padding: 10px; border: 2px solid #0d6efd; background: white; color: #0d6efd; border-radius: 8px; font-weight: bold; cursor: pointer; }
     .mode-btn.active { background: #0d6efd; color: white; }
-    #status { padding: 12px; border-radius: 8px; font-weight: bold; margin-bottom: 15px; background: #e3f2fd; color: #0d47a1; font-size: 14px; }
+    #status { padding: 12px; border-radius: 8px; font-weight: bold; margin-bottom: 15px; background: #e3f2fd; color: #0d47a1; }
     #boxRegistrasi { display: none; border-top: 2px dashed #ccc; margin-top: 15px; padding-top: 5px; }
   </style>
 </head>
@@ -49,11 +49,16 @@
       <input type="text" id="nama" placeholder="Ketik Nama Lengkap Siswa" autocomplete="off">
       <button class="btn-reg" onclick="prosesRegistrasi()">DAFTARKAN IDENTITAS WAJAH</button>
     </div>
+
+    <form id="googleForm" method="POST" target="hidden_iframe" style="display:none;">
+      <input type="hidden" name="payload" id="formPayload">
+    </form>
+    <iframe name="hidden_iframe" id="hidden_iframe" style="display:none;"></iframe>
   </div>
 
 <script>
-// Otomatis mengambil URL Web App saat ini (Tidak perlu repot ganti URL lagi)
-const WEB_APP_URL = google.script.run.withSuccessHandler; 
+// !!! PASTI GANTI DENGAN URL WEB APP BARU ANDA !!!
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbySQWlb-dqYyuwVzUlEr9dJDXGYbsdN4--JYJpkfB7csDeL-ZCW49-1R6lcPL6bdr2O6Q/exec"; 
 
 const video = document.getElementById('video');
 const overlay = document.getElementById('overlay');
@@ -62,6 +67,7 @@ let databaseWajahSiswa = [];
 let sistemMode = 'absen'; 
 let jepretanTerakhirDescriptor = null;
 let sedangMemprosesAbsen = false;
+let fungsiSelesaiKirim = null;
 
 async function initSistem() {
   try {
@@ -70,29 +76,33 @@ async function initSistem() {
     await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
     await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
     
-    statusBox.innerHTML = "⏳ Mengunduh Database Wajah Siswa...";
+    statusBox.innerHTML = "⏳ Mengunduh Database Siswa Terdaftar...";
     muatDatabaseWajah();
   } catch(e) {
     statusBox.innerHTML = "❌ Gagal memuat AI: " + e.message;
   }
 }
 
+// Mengunduh database wajah via JSONP (100% Kebal Blokir CORS Browser)
 function muatDatabaseWajah() {
-  // Memanggil fungsi Backend Apps Script secara langsung (Aman dari CORS)
-  google.script.run.withSuccessHandler(function(res) {
-    if (res.status === "SUCCESS") {
-      databaseWajahSiswa = res.data.filter(s => s.descriptor !== null);
-      statusBox.innerHTML = "💡 Menyalakan Kamera Perangkat...";
-      bukaKamera();
-    } else {
-      statusBox.innerHTML = "❌ Gagal Sinkronisasi Basis Data.";
-    }
-  }).ambilDatabaseSistem();
+  const s = document.createElement('script');
+  s.src = WEB_APP_URL + "?callback=simpanLokalDatabase&t=" + new Date().getTime();
+  document.body.appendChild(s);
+}
+
+function simpanLokalDatabase(res) {
+  if (res.status === "SUCCESS") {
+    databaseWajahSiswa = res.data.filter(s => s.descriptor !== null);
+    statusBox.innerHTML = "💡 Menyalakan Kamera Laptop...";
+    bukaKamera();
+  } else {
+    statusBox.innerHTML = "❌ Gagal Sinkronisasi Basis Data.";
+  }
 }
 
 async function bukaKamera() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: {}, audio: false });
     video.srcObject = stream;
     statusBox.innerHTML = "🖥️ KAMERA SIAP. Silakan Hadap Kamera.";
     statusBox.style.backgroundColor = "#e8f5e9";
@@ -148,6 +158,7 @@ function lakukanPencocokanWajah(descriptorBaru) {
     statusBox.style.color = "#664d03";
 
     const fotoB64 = tangkapGambarB64();
+    
     const payload = {
       tipe: "ABSENSI",
       nama: siswaDitemukan.nama,
@@ -155,17 +166,17 @@ function lakukanPencocokanWajah(descriptorBaru) {
       image: fotoB64
     };
 
-    google.script.run.withSuccessHandler(function(res) {
-      if(res.status === "SUCCESS") {
-        statusBox.innerHTML = `✅ ABSENSI ${siswaDitemukan.nama} BERHASIL!`;
-        statusBox.style.backgroundColor = "#e8f5e9";
-        statusBox.style.color = "#1b5e20";
-        setTimeout(() => {
-          sedangMemprosesAbsen = false;
-          statusBox.innerHTML = "🖥️ KAMERA SIAP. Silakan Hadap Kamera.";
-        }, 4000);
-      }
-    }).simpanDataSistem(payload);
+    // Eksekusi kirim data rahasia via FORM POST
+    kirimViaFormPost(payload, () => {
+      statusBox.innerHTML = `✅ ABSENSI ${siswaDitemukan.nama} BERHASIL!`;
+      statusBox.style.backgroundColor = "#e8f5e9";
+      statusBox.style.color = "#1b5e20";
+      
+      setTimeout(() => {
+        sedangMemprosesAbsen = false;
+        statusBox.innerHTML = "🖥️ KAMERA SIAP. Silakan Hadap Kamera.";
+      }, 4000);
+    });
   }
 }
 
@@ -182,6 +193,7 @@ function prosesRegistrasi() {
   statusBox.style.color = "#664d03";
   
   const fotoB64 = tangkapGambarB64();
+
   const payload = {
     tipe: "SISWA",
     nama: nama,
@@ -190,17 +202,28 @@ function prosesRegistrasi() {
     descriptor: Array.from(jepretanTerakhirDescriptor)
   };
 
-  google.script.run.withSuccessHandler(function(res) {
-    if (res.status === "SUCCESS") {
-      alert("🎉 Pendaftaran Wajah Berhasil!");
-      document.getElementById('nama').value = '';
-      muatDatabaseWajah();
-      setMode('absen');
-    } else {
-      alert("Gagal: " + res.message);
-    }
-  }).simpanDataSistem(payload);
+  kirimViaFormPost(payload, () => {
+    alert("🎉 Pendaftaran Wajah Berhasil!");
+    document.getElementById('nama').value = '';
+    muatDatabaseWajah();
+    setMode('absen');
+  });
 }
+
+// Mesin Pengirim Data Raksasa Tembus Filter CORS Browser Bawaan
+function kirimViaFormPost(dataPayload, callbackSelesai) {
+  fungsiSelesaiKirim = callbackSelesai;
+  document.getElementById('googleForm').action = WEB_APP_URL;
+  document.getElementById('formPayload').value = JSON.stringify(dataPayload);
+  document.getElementById('googleForm').submit();
+}
+
+// Mendengar sinyal balasan sukses dari Google Apps Script
+window.addEventListener('message', function(e) {
+  if (e.data === 'BERHASIL_SIMPAN' && fungsiSelesaiKirim) {
+    fungsiSelesaiKirim();
+  }
+}, false);
 
 function setMode(mode) {
   sistemMode = mode;
